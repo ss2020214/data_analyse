@@ -106,9 +106,9 @@ PARAMS = {
     "peak_rise_dilate_s": 0.3,           # 快速跃变区域边界向外补丁（秒）
 
     # 时间对齐：搜索的延迟范围（label 相对 signal 平移的秒数）
-    # 视频与传感器时间偏差通常在 ±2 秒以内
-    "lag_search_min_s": -2.0,
-    "lag_search_max_s": 2.0,
+    # background.md: "视频最多比传感器早或者晚 10 秒"
+    "lag_search_min_s": -10.0,
+    "lag_search_max_s": 10.0,
     "lag_search_step_s": 0.1,
 
     # label 窗口边界扩展（自适应）

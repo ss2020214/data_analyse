@@ -391,13 +391,14 @@ def estimate_lag(pp: dict, peaks: dict, label: pd.DataFrame, params=PARAMS) -> d
     """
     时间对齐：在 [lag_min, lag_max] 中网格搜索最优 lag。
 
-    优化目标（生理学加权）：
-      最大化"前谷→峰时间 < 峰→后谷时间"的生理学峰落入标注窗口的加权概率。
-      具有"快升慢降"特征（上升时间<下降时间）的峰是真实跳跃，权重=1.0；
-      不具备此特征的峰可能是噪声/伪迹，权重=0.2。
-      score(lag) = ∑(weight_k × [peak_k ∈ 窗口]) / ∑(weight_k)
+    优化目标（窗口峰数匹配，对应 background.md 第三节第4条）：
+      对每个候选 lag，将标注窗口平移后，计算每个窗口内检出峰数与标注 count 的差异。
+      score(lag) = -Σ|peaks_in_window_i - label_count_i|
+      选择 score 最高（即差异之和最小）的 lag。
+      若多个 lag 同分，取 |lag| 最小者。
 
-    这样即使传感器检测峰数与人工标注不一致，也能找到正确的对齐。
+    该准则确保对齐后每个窗口内峰数尽量接近人工标注的跳跃次数，
+    而非单纯追求总检出率。
     """
     if label.empty or peaks["idx"].size == 0:
         return {"lag": 0.0, "score": 0.0, "hit_rate": 0.0,
@@ -411,11 +412,8 @@ def estimate_lag(pp: dict, peaks: dict, label: pd.DataFrame, params=PARAMS) -> d
     pads = _adaptive_pad(label, params)
     s_arr = label["start"].to_numpy()
     e_arr = label["end"].to_numpy()
-    counts = label["count"].to_numpy()
-
-    # 计算峰的生理学权重（预计算，不随 lag 变化）
-    weights = _peak_physiological_weights(pp, peaks)
-    total_weight = float(weights.sum()) if weights.size > 0 else 1.0
+    counts = label["count"].to_numpy().astype(int)
+    total_labeled = int(counts.sum())
 
     scores = np.zeros_like(lags, dtype=float)
     hit_rates = np.zeros_like(lags, dtype=float)
@@ -423,19 +421,18 @@ def estimate_lag(pp: dict, peaks: dict, label: pd.DataFrame, params=PARAMS) -> d
     for i, lag in enumerate(lags):
         s = s_arr + lag - pads
         e = e_arr + lag + pads
-        # 加权命中率：生理学峰落入窗口的权重之和 / 总权重
-        in_any_window = np.zeros(t_peak.size, dtype=bool)
-        for j in range(len(s)):
-            in_any_window |= (t_peak >= s[j]) & (t_peak <= e[j])
-        weighted_hits = float((weights * in_any_window).sum())
-        scores[i] = weighted_hits / max(total_weight, 1e-9)
 
-        # 同时记录普通 hit_rate（用于报告）
+        # 逐窗口计算：|窗口内峰数 - 标注 count| 之和
+        total_error = 0
         total_hits = 0
-        for j in range(len(s)):
-            in_w = np.sum((t_peak >= s[j]) & (t_peak <= e[j]))
-            total_hits += min(int(in_w), int(counts[j]))
-        hit_rates[i] = total_hits / max(1, int(counts.sum()))
+        for j in range(len(s_arr)):
+            n_in_window = int(np.sum((t_peak >= s[j]) & (t_peak <= e[j])))
+            total_error += abs(n_in_window - counts[j])
+            total_hits += min(n_in_window, counts[j])
+
+        # score = 负的误差和（越大越好，0 = 完美匹配）
+        scores[i] = -float(total_error)
+        hit_rates[i] = total_hits / max(1, total_labeled)
 
     best = float(scores.max())
     cand = np.where(scores >= best - 1e-9)[0]

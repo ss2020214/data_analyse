@@ -58,8 +58,8 @@ def run_session(rabbit: str, week: str, plot: bool = True):
     ref_profile = None
     try:
         ref_profile = get_reference_profile(rabbit, week)
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"get_reference_profile({rabbit},{week}) failed: {e}")
 
     # === Stage 1: 不做任何数据清洗先寻峰 ===
     # background.md: "第一次不做任何的数据清洗先寻峰"

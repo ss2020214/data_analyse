@@ -704,8 +704,9 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
                 widths, _, _, _ = peak_widths(detrended, peaks_idx, rel_height=0.5)
                 fwhms = widths / fs_est
                 all_peak_fwhms.extend(fwhms.tolist())
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.warn(f"get_reference_profile({rabbit},{week}): "
+                              f"peak_widths failed ({e})")
 
         # 噪声估计：不在峰附近的段
         peak_mask = np.zeros(len(detrended), dtype=bool)

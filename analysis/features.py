@@ -38,6 +38,7 @@
 """
 
 from __future__ import annotations
+import warnings
 import numpy as np
 import pandas as pd
 from scipy.signal import peak_widths, welch
@@ -68,8 +69,9 @@ def _peak_shape_features(pp: dict, peaks: dict, in_label: np.ndarray) -> dict:
         out["peak_rise_time_median"] = float(np.nanmedian(rise))
         out["peak_fall_time_median"] = float(np.nanmedian(fall))
         out["peak_asymmetry_median"] = float(np.nanmedian(asym))
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"_peak_shape_features: peak_widths failed ({e}), "
+                      f"n_peaks={idx.size}")
     return out
 
 
@@ -96,8 +98,9 @@ def _spectral_features(pp: dict) -> dict:
             out["psd_peak_freq_hz"] = float(sub_f[j])
             out["psd_jump_band_ratio"] = float(sub_P.sum() / P.sum())
         out["psd_total_power"] = float(P.sum())
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"_spectral_features: welch PSD failed ({e}), "
+                      f"signal_len={d.size}")
     return out
 
 
@@ -498,8 +501,9 @@ def session_peak_table(pp: dict, peaks: dict, label: pd.DataFrame,
         denom = rise + fall
         with np.errstate(invalid="ignore", divide="ignore"):
             asym = np.where(denom > 0, (fall - rise) / denom, 0.0)
-    except Exception:
-        pass
+    except Exception as e:
+        warnings.warn(f"session_peak_table: peak_widths failed ({e}), "
+                      f"n_peaks={idx_global.size}")
 
     # 峰面积（近似）：amp × fwhm，代表单次跳跃事件总能量
     peak_area = amp.astype(float) * fwhm
