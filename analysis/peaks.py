@@ -23,10 +23,58 @@ from .config import PARAMS
 # 设计原则：宁多勿少，因为 IPI 只计算同一窗口内相邻峰的间隔，
 # 窗外噪声峰不影响 IPI 计算。
 STAGE1_PARAMS = {
-    "peak_min_distance_s": 0.15,     # 允许快速连击识别（0.18→0.15）
+    "peak_min_distance_s": 0.15,     # 基准最小峰间距（若启用自适应会被覆盖）
     "peak_prominence_mad_k": 0.5,   # 大幅降低 prominence（1.2→0.5）
     "peak_height_mad_k": 0.3,       # 大幅降低 height（0.8→0.3）
 }
+
+# Stage 1 自适应 distance 参数
+# 原理：不同兔子的跳跃节律差异大（~0.5 Hz ~ 3 Hz），
+# 固定 0.15s 的 distance 对慢跳可能太窄（噪声峰混入），对快跳可能太宽（漏峰）。
+# 自适应方案：用极宽松预寻峰估计信号特征 IPI，取其中 25% 作为 distance，
+# 夹在 [0.10, 0.50]s 之间。
+ADAPTIVE_DISTANCE_CONFIG = {
+    "enabled": True,          # 是否启用自适应 distance
+    "ipi_fraction": 0.25,     # distance = median_IPI × fraction
+    "min_s": 0.10,            # distance 下限（秒）
+    "max_s": 0.50,            # distance 上限（秒）
+    "pre_height_k": 0.15,     # 预寻峰 height 阈值（×MAD，极宽松）
+}
+
+
+def _estimate_adaptive_distance(pp: dict) -> float:
+    """
+    用极宽松参数做一次快速预寻峰，估计信号的特征 IPI，
+    据此计算自适应 distance。
+
+    若预寻峰数量不足，回退到固定值。
+    """
+    cfg = ADAPTIVE_DISTANCE_CONFIG
+    if not cfg["enabled"]:
+        return STAGE1_PARAMS["peak_min_distance_s"]
+
+    d = pp["detrended"]
+    mad = pp["mad"]
+    fs = pp["fs"]
+
+    # 极宽松预寻峰
+    pre_dist = max(1, int(0.08 * fs))  # 0.08s，几乎不禁用
+    pre_h = cfg["pre_height_k"] * mad
+    pre_idx, _ = find_peaks(d, height=pre_h, distance=pre_dist)
+
+    if len(pre_idx) < 4:
+        # 峰太少，回退到固定 distance
+        return STAGE1_PARAMS["peak_min_distance_s"]
+
+    # 估计中位 IPI
+    t_peaks = pp["t"][pre_idx]
+    ipis = np.diff(np.sort(t_peaks))
+    median_ipi = float(np.median(ipis))
+
+    # 自适应 distance: IPI 的一定比例，夹在上下限之间
+    adaptive_dist = median_ipi * cfg["ipi_fraction"]
+    adaptive_dist = max(cfg["min_s"], min(cfg["max_s"], adaptive_dist))
+    return adaptive_dist
 
 
 def detect_peaks_stage1(pp: dict, params=PARAMS) -> dict:
@@ -45,8 +93,9 @@ def detect_peaks_stage1(pp: dict, params=PARAMS) -> dict:
     d = pp["detrended"]
     mad = pp["mad"]
 
-    # 使用 Stage 1 专用参数（极宽松）
-    distance = max(1, int(STAGE1_PARAMS["peak_min_distance_s"] * fs))
+    # 自适应 distance：根据信号特征节律动态调整
+    adaptive_dist_s = _estimate_adaptive_distance(pp)
+    distance = max(1, int(adaptive_dist_s * fs))
     height = STAGE1_PARAMS["peak_height_mad_k"] * mad
     prom = STAGE1_PARAMS["peak_prominence_mad_k"] * mad
 
@@ -59,6 +108,7 @@ def detect_peaks_stage1(pp: dict, params=PARAMS) -> dict:
         "amp_detrended": d[idx],
         "amp_above_baseline": d[idx],
         "prominence": props.get("prominences", np.array([])),
+        "_adaptive_distance_s": adaptive_dist_s,  # 记录自适应 distance 供调试
     }
 
 
@@ -86,7 +136,9 @@ def detect_peaks_stage1_adaptive(pp: dict, label: pd.DataFrame,
     # 初始参数
     height_k = STAGE1_PARAMS["peak_height_mad_k"]
     prom_k = STAGE1_PARAMS["peak_prominence_mad_k"]
-    distance = max(1, int(STAGE1_PARAMS["peak_min_distance_s"] * fs))
+    # 自适应 distance：根据信号特征节律动态调整
+    adaptive_dist_s = _estimate_adaptive_distance(pp)
+    distance = max(1, int(adaptive_dist_s * fs))
 
     target_lo = 0.85   # 检出率下限
     target_hi = 1.3    # 检出率上限
