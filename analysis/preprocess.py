@@ -17,9 +17,12 @@
 """
 
 from __future__ import annotations
+import warnings
 import numpy as np
 import pandas as pd
 from typing import Tuple
+from scipy.sparse import diags, csc_matrix
+from scipy.sparse.linalg import spsolve
 from .config import path_orig, path_label, PARAMS, WEEKS
 
 
@@ -93,6 +96,97 @@ def _rolling_mad(x: np.ndarray, win: int) -> np.ndarray:
     return mad.to_numpy()
 
 
+def _baseline_asls(y: np.ndarray, lam: float = 1e6, p: float = 0.01,
+                   niter: int = 10) -> np.ndarray:
+    """
+    非对称最小二乘 (Asymmetric Least Squares) 基线校正。
+
+    原理（Eilers & Boelens, 2005）：
+      迭代求解加权最小二乘问题：
+        minimize  Σ w_i (y_i - z_i)² + λ Σ (Δ²z_i)²
+      其中权重 w_i = p（若 y_i > z_i，即峰上方），否则 w_i = 1-p。
+
+    非对称权重确保基线穿过信号下方（峰不会拉高基线），
+    二阶差分惩罚项控制基线光滑度。
+
+    参数：
+      y:      输入信号（1D array）
+      lam:    平滑度参数。越大基线越光滑。典型范围 1e4~1e8
+      p:      非对称性参数。越小基线越低（越贴近信号下包络）。
+              典型范围 0.001~0.1
+      niter:  最大迭代次数。通常 5~10 次收敛
+
+    返回：
+      baseline: 与 y 等长的基线数组
+
+    计算复杂度：O(niter × n)，对 600 点信号约 0.02s
+    """
+    n = len(y)
+    if n < 10:
+        return np.full(n, np.median(y))
+
+    # 二阶差分矩阵 D (n-2 × n)，每行 [1, -2, 1]
+    D = diags([1.0, -2.0, 1.0], [0, 1, 2], shape=(n - 2, n))
+    DTD = (D.T @ D).tocsc()  # n×n 五对角稀疏矩阵
+
+    w = np.ones(n)
+    z = y.copy()
+
+    for _ in range(niter):
+        W = diags(w, 0, shape=(n, n))
+        A = W + lam * DTD
+        b = w * y
+        try:
+            z_new = spsolve(csc_matrix(A), b)
+        except Exception:
+            # 稀疏求解失败时回退到稠密求解
+            z_new = np.linalg.solve(A.toarray(), b)
+        # 收敛检查
+        if np.max(np.abs(z_new - z)) < 1e-6 * (np.max(y) - np.min(y) + 1e-9):
+            z = z_new
+            break
+        z = z_new
+        w = np.where(y > z, p, 1.0 - p)
+
+    return z
+
+
+def _compute_baseline(r: np.ndarray, fs: float, params: dict,
+                      stage: str = "stage2") -> np.ndarray:
+    """
+    统一的基线计算入口，根据 params["baseline_method"] 调度。
+
+    stage="stage1": 使用 Stage 1 参数（更宽松，避免吞峰）
+    stage="stage2": 使用 Stage 2 参数（标准清洗）
+    """
+    method = params.get("baseline_method", "rolling_quantile")
+
+    if method == "asls":
+        lam = params.get("asls_lambda", 1e6)
+        p = params.get("asls_p", 0.01)
+        niter = params.get("asls_niter", 10)
+        return _baseline_asls(r, lam=lam, p=p, niter=niter)
+
+    # 默认：滚动分位数
+    if stage == "stage1":
+        win_b = max(11, int(params["baseline_window_s"] * 3.0 * fs))
+        bq = 0.15
+        min_periods = win_b // 3
+    else:
+        win_b = max(11, int(params["baseline_window_s"] * fs))
+        bq = float(params.get("baseline_quantile", 0.30))
+        min_periods = win_b // 2
+
+    if win_b % 2 == 0:
+        win_b += 1
+
+    baseline = (pd.Series(r)
+                .rolling(win_b, center=True, min_periods=min_periods)
+                .quantile(bq)
+                .bfill().ffill().to_numpy())
+    return baseline
+
+
 def preprocess_raw(t: np.ndarray, r: np.ndarray, params=PARAMS):
     """
     Stage 1 纯原始预处理：不做任何数据清洗，仅做重采样和动态基线。
@@ -120,18 +214,8 @@ def preprocess_raw(t: np.ndarray, r: np.ndarray, params=PARAMS):
     t_uni = np.arange(t[0], t[-1], 1.0 / fs)
     r_uni = np.interp(t_uni, t, r)
 
-    # 2) 动态基线：滚动低分位数（跟踪基线漂移，不使用固定值）
-    # 优化：用更宽窗口（×3.0）+ 更低分位数（P15）
-    # 原因：密集跳跃时，较窄窗口的 median/P30 会被峰本身抬高，
-    # 导致 detrended 幅度变小、小峰被淡化而漏检。
-    win_b = max(11, int(params["baseline_window_s"] * 3.0 * fs))  # 25s*3=75s窗口
-    if win_b % 2 == 0:
-        win_b += 1
-    bq = 0.15  # Stage 1 专用：P15（比 Stage 2 的 P30 更低，确保基线不吞峰）
-    baseline = (pd.Series(r_uni)
-                .rolling(win_b, center=True, min_periods=win_b // 3)
-                .quantile(bq)
-                .bfill().ffill().to_numpy())
+    # 2) 动态基线（根据 baseline_method 配置选择算法）
+    baseline = _compute_baseline(r_uni, fs, params, stage="stage1")
 
     # 3) detrended
     detrended = r_uni - baseline
@@ -186,15 +270,8 @@ def preprocess_minimal(t: np.ndarray, r: np.ndarray, params=PARAMS):
             r_clean[hard_bad] = np.interp(
                 np.where(hard_bad)[0], good_idx, r_uni[good_idx])
 
-    # 3) 宽松基线（较长窗口，仅跟踪慢漂移）
-    win_b = max(11, int(params["baseline_window_s"] * 1.5 * fs))  # 比正式清洗宽50%
-    if win_b % 2 == 0:
-        win_b += 1
-    bq = float(params.get("baseline_quantile", 0.5))
-    baseline = (pd.Series(r_clean)
-                .rolling(win_b, center=True, min_periods=win_b // 2)
-                .quantile(bq)
-                .bfill().ffill().to_numpy())
+    # 3) 宽松基线（根据 baseline_method 配置选择算法）
+    baseline = _compute_baseline(r_clean, fs, params, stage="stage2")
 
     # 4) detrended
     detrended = r_clean - baseline
@@ -284,19 +361,11 @@ def preprocess(t: np.ndarray, r: np.ndarray, params=PARAMS,
             r_clean[bad] = np.interp(np.where(bad)[0], good_idx, r_uni_h[good_idx])
     bad = bad | hard_bad        # 合并两类污染
 
-    # 3) 动态基线：滚动低分位数（窗 ~25 s，能滤掉单次跳跃同时跟踪慢漂移）
-    #    v4：从 P50 改为 P30（默认）。信号大部分时间在静息位、偶尔向上跳起，
-    #    median 会被峰本身抬高。低分位数更贴近真静息位，detrended 幅度不被吞掉。
-    win_b = max(11, int(params["baseline_window_s"] * fs))
-    if win_b % 2 == 0:
-        win_b += 1
-    bq = float(params.get("baseline_quantile", 0.5))
-    baseline = (pd.Series(r_clean)
-                .rolling(win_b, center=True, min_periods=win_b // 2)
-                .quantile(bq)
-                .to_numpy())
-    # 边缘 NaN 用最近邻填充
-    baseline = pd.Series(baseline).bfill().ffill().to_numpy()
+    # 3) 动态基线（根据 baseline_method 配置选择算法）
+    baseline = _compute_baseline(r_clean, fs, params, stage="stage2")
+    # 边缘 NaN 用最近邻填充（AsLS 无 NaN，滚动分位数可能有）
+    if np.any(~np.isfinite(baseline)):
+        baseline = pd.Series(baseline).bfill().ffill().to_numpy()
 
     # 4) detrended
     detrended = r_clean - baseline

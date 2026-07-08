@@ -87,8 +87,18 @@ PARAMS = {
     "baseline_window_s": 25.0,           # 秒
     # v4：baseline 从 P50（median）改为低分位数 quantile。
     # 信号大部分时间处于静息基线、偶尔向上跳起 → median 会被峰本身抬高。
-    # P30 更接近“真静息位”，detrended 幅度不被吞掉，等价于再放松一档阈值。
+    # P30 更接近"真静息位"，detrended 幅度不被吞掉，等价于再放松一档阈值。
     "baseline_quantile": 0.30,           # 0.5=中位数，0.3=偏静息位
+    
+    # 基线估计方法：
+    #   "rolling_quantile" - 滚动分位数（当前默认，快速但可能被密集峰抬高）
+    #   "asls" - 非对称最小二乘 (AsLS)，迭代拟合不敏感于峰密度的光滑基线
+    # AsLS 优势：对峰密度不敏感，自动适应信号局部特征，无需调窗口大小
+    # AsLS 劣势：计算量更大（~10次迭代 × 稀疏线性求解），单次 ~0.1s
+    "baseline_method": "rolling_quantile",  # "rolling_quantile" | "asls"
+    "asls_lambda": 1e6,                   # AsLS 平滑度（越大基线越光滑）
+    "asls_p": 0.01,                       # AsLS 非对称性（越小基线越低，0.001~0.1）
+    "asls_niter": 10,                     # AsLS 最大迭代次数
 
     # 峰值检测（detrended 信号上）
     # v3 放宽：用户反馈"相对基线提升不高但也是峰"被漏掉。
