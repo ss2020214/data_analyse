@@ -57,12 +57,12 @@ def _peak_shape_features(pp: dict, peaks: dict, in_label: np.ndarray) -> dict:
     if idx.size == 0:
         return out
     try:
-        # rel_height=0.5 → FWHM；rel_height=0.9 → 接近峰底，用于 rise/fall 估计
+        # rel_height=0.5 → 半高宽（FWHM），也是最稳定的宽度测量位置
+        # 上升/下降时间同样在 0.5 高度处计算，避免 0.9 处峰顶噪声放大
         widths_h, _, l50, r50 = peak_widths(d, idx, rel_height=0.5)
-        widths_b, _, l90, r90 = peak_widths(d, idx, rel_height=0.9)
         fwhm = widths_h / fs
-        rise = (idx - l90) / fs
-        fall = (r90 - idx) / fs
+        rise = (idx - l50) / fs
+        fall = (r50 - idx) / fs
         denom = rise + fall
         asym = np.where(denom > 0, (fall - rise) / denom, 0.0)
         out["peak_fwhm_median"] = float(np.nanmedian(fwhm))
@@ -493,11 +493,11 @@ def session_peak_table(pp: dict, peaks: dict, label: pd.DataFrame,
     fall = np.full(n, np.nan)
     asym = np.full(n, np.nan)
     try:
-        widths_h, _, _, _ = peak_widths(d, idx_global, rel_height=0.5)
-        _,        _, l90, r90 = peak_widths(d, idx_global, rel_height=0.9)
+        # rel_height=0.5 → 半高宽（FWHM）统一用于所有宽度测量，稳定可靠
+        widths_h, _, l50, r50 = peak_widths(d, idx_global, rel_height=0.5)
         fwhm = widths_h / fs
-        rise = (idx_global - l90) / fs
-        fall = (r90 - idx_global) / fs
+        rise = (idx_global - l50) / fs
+        fall = (r50 - idx_global) / fs
         denom = rise + fall
         with np.errstate(invalid="ignore", divide="ignore"):
             asym = np.where(denom > 0, (fall - rise) / denom, 0.0)
