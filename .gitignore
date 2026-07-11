@@ -50,3 +50,10 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# macOS files
+.DS_Store
+__MACOSX/
+
+# Excel temporary files
+~$*.xlsx
