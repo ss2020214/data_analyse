@@ -30,7 +30,7 @@ OUT_STD.mkdir(parents=True, exist_ok=True)
 # 清洗参数
 CLEAN_PARAMS = {
     "time_min_s": 0.0,           # 时间最小值（排除负时间）
-    "time_max_s": 600.0,         # 时间最大值（10分钟合理上限）
+    "time_max_s": 900.0,         # 时间最大值（15分钟，兼容超10分钟的实验）
     "resistance_min_ohm": 1000,  # 电阻最小值（低于此不合理）
     "resistance_max_ohm": 1500000, # 电阻最大值（不同传感器基阻差异大，留足余量）
     "max_time_gap_s": 5.0,       # 最大允许时间间隔（秒）
