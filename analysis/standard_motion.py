@@ -661,6 +661,7 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
     for grp in groups:
         t = grp["time"]
         r = grp["resistance"]
+        count = grp["count"]
         mask = np.isfinite(t) & np.isfinite(r)
         t, r = t[mask], r[mask]
         if len(t) < 10:
@@ -670,13 +671,18 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
         idx_sort = np.argsort(t)
         t, r = t[idx_sort], r[idx_sort]
 
-        # 简单基线：滚动P30（与自由运动流水线一致）
+        # P30 滚动基线（5s窗口，与 _extract_standard_motion_peaks 一致）
         fs_est = _estimate_fs(t)
-        win_b = max(11, int(10.0 * fs_est))  # 10s窗口，标准运动片段较短
+        win_b = max(11, int(5.0 * fs_est))
         if win_b % 2 == 0:
             win_b += 1
+        # 边界处理：点数不足以支撑完整窗口时，缩小至点数的 2/3
+        if len(t) < win_b:
+            win_b = max(5, (2 * len(t)) // 3)
+            if win_b % 2 == 0:
+                win_b += 1
         baseline = (pd.Series(r)
-                    .rolling(win_b, center=True, min_periods=win_b // 2)
+                    .rolling(win_b, center=True, min_periods=max(3, win_b // 2))
                     .quantile(0.30)
                     .bfill().ffill().to_numpy())
 
@@ -684,16 +690,23 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
         bl_median = float(np.nanmedian(baseline))
         all_baselines.append(bl_median)
 
-        # 峰检测：标准运动峰清晰，用较保守的参数
+        # 峰检测：与 _extract_standard_motion_peaks 使用相同参数
         mad = float(np.nanmedian(np.abs(detrended - np.nanmedian(detrended))))
         if mad <= 0:
             mad = float(np.nanstd(detrended)) or 1.0
 
-        distance = max(1, int(0.3 * fs_est))  # 最小峰间距0.3s
+        min_dist_s = 1.0
+        distance = max(1, int(min_dist_s * fs_est))
+
+        # 自适应阈值衰减：默认 2×MAD，检出不足时逐级降低
         height = 2.0 * mad
-        prom = 2.0 * mad
-        peaks_idx, props = find_peaks(detrended, distance=distance,
-                                      height=height, prominence=prom)
+        peaks_idx, _ = find_peaks(detrended, distance=distance, height=height)
+        if count > 0 and peaks_idx.size < count * 0.5:
+            height = 1.5 * mad
+            peaks_idx, _ = find_peaks(detrended, distance=distance, height=height)
+        if count > 0 and peaks_idx.size < count * 0.5:
+            height = 1.0 * mad
+            peaks_idx, _ = find_peaks(detrended, distance=distance, height=height)
 
         if peaks_idx.size > 0:
             peak_amps = detrended[peaks_idx]

@@ -49,7 +49,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================
 # 1. 标准运动数据提取
 # ============================================================
-def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 15) -> pd.DataFrame:
+def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.DataFrame:
     """提取标准运动中所有周的峰值 ΔR/R₀。
 
     寻峰约束：
@@ -158,6 +158,19 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 15) -> pd.Da
                         "delta_r_r0": float(delta_r_r0[i]),
                     })
 
+        # 周级别双峰过滤：若整周 ΔR/R₀ 呈明显双峰分布，只保留低群
+        if len(week_peaks) >= 6:
+            dr_vals = np.array([p["delta_r_r0"] for p in week_peaks])
+            dr_sorted = np.sort(dr_vals)
+            ratios = dr_sorted[1:] / np.maximum(dr_sorted[:-1], 1e-10)
+            max_gap_idx = int(np.argmax(ratios))
+            gap_ratio = ratios[max_gap_idx]
+            n_low = max_gap_idx + 1
+            n_high = len(dr_sorted) - n_low
+            if gap_ratio > 2.0 and n_low >= 3 and n_high >= 3:
+                cutoff = (dr_sorted[max_gap_idx] + dr_sorted[max_gap_idx + 1]) / 2
+                week_peaks = [p for p in week_peaks if p["delta_r_r0"] <= cutoff]
+
         # 每周最多取 max_per_week 个峰，按时间均匀选取
         if week_peaks:
             df_week = pd.DataFrame(week_peaks)
@@ -173,15 +186,14 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 15) -> pd.Da
                     candidates = np.where(mask)[0]
                     candidates = [c for c in candidates if c not in sel_idx]
                     if candidates:
-                        # 段内取 ΔR/R₀ 最大的
-                        best = max(candidates,
+                        # 段内取 ΔR/R₀ 最小的
+                        best = min(candidates,
                                    key=lambda x: df_week.iloc[x]["delta_r_r0"])
                         sel_idx.append(best)
                 # 空段补充：从剩余未选中取 ΔR/R₀ 最大的
                 if len(sel_idx) < max_per_week:
                     remaining = [i for i in range(len(df_week)) if i not in sel_idx]
-                    remaining.sort(key=lambda x: df_week.iloc[x]["delta_r_r0"],
-                                   reverse=True)
+                    remaining.sort(key=lambda x: df_week.iloc[x]["delta_r_r0"])
                     for ri in remaining:
                         if len(sel_idx) >= max_per_week:
                             break
@@ -264,7 +276,7 @@ def _extract_free_motion_points(rabbit: str, n_per_week: int = 30) -> pd.DataFra
         if ref_profile is not None:
             ref_rel_amp = ref_profile.get("peak_rel_amp_median", 0)
             if ref_rel_amp > 0:
-                upper_limit = ref_rel_amp * 1.2
+                upper_limit = ref_rel_amp * 1.0
 
         # 过滤有效值
         valid = np.isfinite(delta_r_r0) & (delta_r_r0 > 0)
@@ -398,7 +410,7 @@ def _extract_free_motion_peaks_in_window(rabbit: str) -> pd.DataFrame:
         if ref_profile is not None:
             ref_rel_amp = ref_profile.get("peak_rel_amp_median", 0)
             if ref_rel_amp > 0:
-                upper_limit = ref_rel_amp * 1.2
+                upper_limit = ref_rel_amp * 1.0
 
         for i in range(len(peak_idx)):
             val = delta_r_r0[i]
