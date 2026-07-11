@@ -186,14 +186,15 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
                     candidates = np.where(mask)[0]
                     candidates = [c for c in candidates if c not in sel_idx]
                     if candidates:
-                        # 段内取 ΔR/R₀ 最小的
-                        best = min(candidates,
+                        # 段内取 ΔR/R₀ 最大的
+                        best = max(candidates,
                                    key=lambda x: df_week.iloc[x]["delta_r_r0"])
                         sel_idx.append(best)
                 # 空段补充：从剩余未选中取 ΔR/R₀ 最大的
                 if len(sel_idx) < max_per_week:
                     remaining = [i for i in range(len(df_week)) if i not in sel_idx]
-                    remaining.sort(key=lambda x: df_week.iloc[x]["delta_r_r0"])
+                    remaining.sort(key=lambda x: df_week.iloc[x]["delta_r_r0"],
+                                   reverse=True)
                     for ri in remaining:
                         if len(sel_idx) >= max_per_week:
                             break
