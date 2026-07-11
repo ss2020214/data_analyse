@@ -274,7 +274,7 @@ def _extract_free_motion_points(rabbit: str, n_per_week: int = 30) -> pd.DataFra
         # 允许 1.2× 容差（考虑测量误差）
         upper_limit = None
         if ref_profile is not None:
-            ref_rel_amp = ref_profile.get("peak_rel_amp_median", 0)
+            ref_rel_amp = ref_profile.get("peak_rel_amp_p90", 0)
             if ref_rel_amp > 0:
                 upper_limit = ref_rel_amp * 1.0
 
@@ -408,7 +408,7 @@ def _extract_free_motion_peaks_in_window(rabbit: str) -> pd.DataFrame:
         # 上限过滤：标准运动峰值 × 1.2
         upper_limit = None
         if ref_profile is not None:
-            ref_rel_amp = ref_profile.get("peak_rel_amp_median", 0)
+            ref_rel_amp = ref_profile.get("peak_rel_amp_p90", 0)
             if ref_rel_amp > 0:
                 upper_limit = ref_rel_amp * 1.0
 

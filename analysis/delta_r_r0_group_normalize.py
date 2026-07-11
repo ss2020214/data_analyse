@@ -101,7 +101,7 @@ def _extract_data_pool(rabbit: str, week: str) -> dict | None:
     # 上限过滤
     upper_limit = None
     if ref_profile is not None:
-        ref_rel_amp = ref_profile.get("peak_rel_amp_median", 0)
+        ref_rel_amp = ref_profile.get("peak_rel_amp_p90", 0)
         if ref_rel_amp > 0:
             upper_limit = ref_rel_amp * 1.0  # 严格上限
 

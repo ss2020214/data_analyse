@@ -748,12 +748,14 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
     bl_median = float(np.nanmedian(all_baselines))
     peak_amp_median = float(np.nanmedian(peak_amps_arr))
     peak_amp_mad = float(np.nanmedian(np.abs(peak_amps_arr - peak_amp_median)))
+    peak_amp_p90 = float(np.percentile(peak_amps_arr, 90))
 
     profile = {
         "baseline_median": bl_median,
         "peak_amp_median": peak_amp_median,
         "peak_amp_mad": peak_amp_mad,
         "peak_rel_amp_median": peak_amp_median / max(abs(bl_median), 1e-6),
+        "peak_rel_amp_p90": peak_amp_p90 / max(abs(bl_median), 1e-6),
         "peak_fwhm_median": float(np.nanmedian(all_peak_fwhms))
                              if all_peak_fwhms else 0.4,
         "noise_mad": noise_mad,
