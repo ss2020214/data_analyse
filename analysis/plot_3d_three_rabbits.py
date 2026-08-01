@@ -26,10 +26,10 @@ from pathlib import Path
 from .config import WEEKS, OUT_FIG, RABBIT2GROUP
 
 # ── 三只兔子（从后到前）─────────────────────────────────
-RABBITS = ["086", "068", "030"]
+RABBITS = ["068", "094", "030"]
 RABBIT_COLORS = {
     "030": "#1f77b4",  # normal
-    "086": "#9467bd",  # pathological
+    "094": "#8c564b",  # pathological
     "068": "#cd853f",  # sham
 }
 
@@ -162,14 +162,14 @@ def plot_one(df_all, chart_type):
         if sub.empty:
             continue
         ax.scatter(sub["x_jit"], sub["y_jit"], sub["delta_r_r0_clipped"],
-                   c=[RABBIT_COLORS[rabbit]], s=28, alpha=0.10,
-                   edgecolors="none", label=rabbit, zorder=10)
+                   c=[RABBIT_COLORS[rabbit]], s=22, alpha=0.10,
+                   edgecolors="black", linewidths=1.6, label=rabbit, zorder=10)
 
     ax.set_xlabel("Rabbit ID", fontsize=12, labelpad=10)
     ax.set_ylabel("Time", fontsize=12, labelpad=10)
     ax.set_zlabel("Normalized ΔR/R0 (%)", fontsize=12, labelpad=10)
     cn = TYPE_LABELS.get(chart_type, chart_type)
-    ax.set_title(f"086 / 068 / 030 — {cn}", fontsize=14, pad=18)
+    ax.set_title(f"068 / 094 / 030 — {cn}", fontsize=14, pad=18)
 
     x_ticks = [rabbit_to_x[r] for r in rabbit_list]
     ax.set_xticks(x_ticks)
@@ -177,6 +177,9 @@ def plot_one(df_all, chart_type):
     ax.set_yticks(range(1, 7))
     ax.set_yticklabels([f"Week{i}" for i in range(1, 7)], fontsize=10)
     ax.set_zlim(0, z_max)
+    ax.zaxis.set_major_locator(plt.MaxNLocator(5))
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.line.set_linewidth(1.6)
     ax.grid(False)
     ax.xaxis.pane.fill = False
     ax.yaxis.pane.fill = False
@@ -188,7 +191,7 @@ def plot_one(df_all, chart_type):
               loc="upper left", bbox_to_anchor=(0.0, 1.0), framealpha=0.7)
     ax.view_init(elev=18, azim=-30)
 
-    save_path = OUT_DIR / f"3d_030_086_068_{chart_type}.png"
+    save_path = OUT_DIR / f"3d_068_094_030_{chart_type}.png"
     fig.subplots_adjust(left=0.08, right=0.95, top=0.92, bottom=0.12)
     fig.savefig(save_path, dpi=180)
     plt.close(fig)
@@ -198,7 +201,7 @@ def plot_one(df_all, chart_type):
 def main():
     _setup_chinese_font()
     print("=" * 60)
-    print("030 / 086 / 068 联合 3D 可视化")
+    print("068 / 094 / 030 联合 3D 可视化")
     print("=" * 60)
 
     print("\n加载数据...")

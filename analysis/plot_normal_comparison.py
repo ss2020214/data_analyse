@@ -23,12 +23,15 @@ from pathlib import Path
 from .config import WEEKS, OUT_FIG
 
 # ── 配色与偏移 ────────────────────────────────────────
+# 正常组统一蓝色，组内通过透明度 alpha 分层区分不同兔子
 NORMAL_RABBITS = ["020", "075", "030"]
 RABBIT_COLORS = {
-    "020": "#2ca02c",
-    "075": "#ff7f0e",
+    "020": "#1f77b4",
+    "075": "#1f77b4",
     "030": "#1f77b4",
 }
+# 组内透明度分层（三档：L1 最显著 → L3 最淡）
+RABBIT_ALPHAS = {"020": 0.95, "075": 0.65, "030": 0.40}
 RABBIT_OFFSETS = {"020": -0.15, "075": 0, "030": 0.15}
 
 OUT_DIR = OUT_FIG / "delta_r_r0" / "optimized_v3"
@@ -81,7 +84,7 @@ def plot_comparison():
         ax1.errorbar(
             [w + offset for w in ws], means, yerr=stds,
             fmt='o-', color=color, capsize=4, lw=2, markersize=8,
-            label=rabbit, alpha=0.65,
+            label=rabbit, alpha=RABBIT_ALPHAS[rabbit],
         )
     ax1.set_xlabel("Time", fontsize=12)
     ax1.set_ylabel("ΔR/R0", fontsize=12)
@@ -110,7 +113,7 @@ def plot_comparison():
         ax2.errorbar(
             [w + offset for w in ws], means, yerr=stds,
             fmt='o-', color=color, capsize=4, lw=2, markersize=8,
-            label=rabbit, alpha=0.65,
+            label=rabbit, alpha=RABBIT_ALPHAS[rabbit],
         )
     ax2.set_xlabel("Time", fontsize=12)
     ax2.set_ylabel("ΔR/R0", fontsize=12)

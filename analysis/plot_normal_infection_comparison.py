@@ -25,9 +25,16 @@ from .config import WEEKS, OUT_FIG
 # ── 配色与偏移 ────────────────────────────────────────────
 # 展平顺序：感染组在前，正常组在后
 DISPLAY_ORDER = ["088", "065", "016", "020", "075", "030"]
+# 兔子颜色：组间用色相区分（感染组=红，正常组=蓝），
+# 组内同色，仅通过透明度 alpha 分层区分不同兔子
 RABBIT_COLORS = {
-    "088": "#7f7f7f", "065": "#bcbd22", "016": "#e377c2",  # infection
-    "020": "#2ca02c", "075": "#ff7f0e", "030": "#1f77b4",  # normal
+    "088": "#d62728", "065": "#d62728", "016": "#d62728",  # infection（红）
+    "020": "#1f77b4", "075": "#1f77b4", "030": "#1f77b4",  # normal（蓝）
+}
+# 组内透明度分层（三档：L1 最显著 → L3 最淡）
+RABBIT_ALPHAS = {
+    "088": 0.95, "065": 0.65, "016": 0.40,   # infection
+    "020": 0.95, "075": 0.65, "030": 0.40,   # normal
 }
 # 每个兔子在 Week 位置的偏移（避免 errorbar 重叠）
 OFFSETS = {
@@ -90,7 +97,7 @@ def plot_comparison():
             [w + offset for w in ws], means, yerr=stds,
             fmt=f'o{ls}', color=RABBIT_COLORS[rabbit],
             capsize=3, lw=1.8, markersize=7,
-            label=rabbit, alpha=0.65,
+            label=rabbit, alpha=RABBIT_ALPHAS[rabbit],
         )
     ax1.set_xlabel("Time", fontsize=12)
     ax1.set_ylabel("ΔR/R0", fontsize=12)
@@ -120,7 +127,7 @@ def plot_comparison():
             [w + offset for w in ws], means, yerr=stds,
             fmt=f'o{ls}', color=RABBIT_COLORS[rabbit],
             capsize=3, lw=1.8, markersize=7,
-            label=rabbit, alpha=0.65,
+            label=rabbit, alpha=RABBIT_ALPHAS[rabbit],
         )
     ax2.set_xlabel("Time", fontsize=12)
     ax2.set_ylabel("ΔR/R0", fontsize=12)

@@ -37,10 +37,25 @@ EXCLUDED_RABBITS = {"071"}
 # 显示的两个组及顺序
 DISPLAY_GROUPS = ["infection", "normal"]
 
-# 兔子颜色（与独立 3D 图一致）
+# 兔子颜色：组间用色相区分（正常组=蓝，感染组=红），
+# 组内同色，仅通过透明度 alpha 分层区分不同兔子
 RABBIT_COLORS: dict[str, str] = {
-    "030": "#1f77b4", "075": "#ff7f0e", "020": "#2ca02c",
-    "016": "#e377c2", "065": "#bcbd22", "088": "#7f7f7f",
+    # 正常组：统一蓝色
+    "030": "#1f77b4", "075": "#1f77b4", "020": "#1f77b4",
+    # 感染组：统一红色
+    "016": "#d62728", "065": "#d62728", "088": "#d62728",
+}
+
+# 组内透明度分层（三档：L1 最显著 → L3 最淡）
+RABBIT_ALPHAS: dict[str, float] = {
+    "020": 0.35, "075": 0.22, "030": 0.12,   # 正常组
+    "088": 0.35, "065": 0.22, "016": 0.12,   # 感染组
+}
+
+# 包络线透明度分层（三档：L1 最显著 → L3 最淡）
+RABBIT_ENV_ALPHA: dict[str, float] = {
+    "020": 0.55, "075": 0.38, "030": 0.22,   # 正常组
+    "088": 0.55, "065": 0.38, "016": 0.22,   # 感染组
 }
 
 # 图表类型
@@ -66,13 +81,13 @@ def _desaturate_hex(hex_color: str, blend: float = 0.70) -> tuple:
     return (r2 / 255.0, g2 / 255.0, b2 / 255.0)
 
 
-def _draw_envelope_for_rabbits(ax, df_all, rabbit_to_x, rabbit_env_colors):
+def _draw_envelope_for_rabbits(ax, df_all, rabbit_to_x, rabbit_env_colors, rabbit_env_alphas):
     """为所有兔子绘制 Y-Z 平面包络。"""
     x_half = 0.55
-    fill_alpha = 0.55
 
     for rabbit, x_pos in rabbit_to_x.items():
         env_color = rabbit_env_colors.get(rabbit, (0.5, 0.5, 0.5))
+        fill_alpha = rabbit_env_alphas.get(rabbit, 0.55)
         sub_r = df_all[df_all["rabbit"] == rabbit]
 
         week_z: dict[int, float] = {}
@@ -239,12 +254,15 @@ def plot_combined(df_all: pd.DataFrame, chart_type: str):
     ax.set_proj_type("persp")
     ax.set_box_aspect([1, 4, 0.6])
 
-    # ── 包络 ──
+    # ── 包络：组内统一浅色，透明度分层区分 ──
     rabbit_env_colors = {
-        r: _desaturate_hex(RABBIT_COLORS.get(r, "#808080"))
+        r: _desaturate_hex(RABBIT_COLORS.get(r, "#808080"), 0.55)
         for r in rabbit_to_x
     }
-    _draw_envelope_for_rabbits(ax, df_env, rabbit_to_x, rabbit_env_colors)
+    rabbit_env_alphas = {
+        r: RABBIT_ENV_ALPHA.get(r, 0.55) for r in rabbit_to_x
+    }
+    _draw_envelope_for_rabbits(ax, df_env, rabbit_to_x, rabbit_env_colors, rabbit_env_alphas)
 
     # ── 散点 ──
     for rabbit, group_name in rabbit_groups:
@@ -254,7 +272,7 @@ def plot_combined(df_all: pd.DataFrame, chart_type: str):
         color = RABBIT_COLORS.get(rabbit, "gray")
         ax.scatter(
             sub["x_jit"], sub["y_jit"], sub["delta_r_r0_clipped"],
-            c=[color], s=28, alpha=0.10, edgecolors="none",
+            c=[color], s=22, alpha=RABBIT_ALPHAS.get(rabbit, 0.10), edgecolors="black", linewidths=1.6,
             label=f"{rabbit}({group_name})", zorder=10,
         )
 
@@ -272,6 +290,9 @@ def plot_combined(df_all: pd.DataFrame, chart_type: str):
     ax.set_yticks(range(1, 7))
     ax.set_yticklabels([f"Week{i}" for i in range(1, 7)], fontsize=10)
     ax.set_zlim(0, z_max)
+    ax.zaxis.set_major_locator(plt.MaxNLocator(5))
+    for axis in [ax.xaxis, ax.yaxis, ax.zaxis]:
+        axis.line.set_linewidth(1.6)
 
     ax.grid(False)
     ax.xaxis.pane.fill = False

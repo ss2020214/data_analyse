@@ -21,9 +21,9 @@ warnings.filterwarnings("ignore", message=".*Glyph.*missing from font")
 from pathlib import Path
 from .config import WEEKS, OUT_FIG
 
-RABBITS = ["086", "068", "030"]
-COLORS = {"086": "#9467bd", "068": "#cd853f", "030": "#1f77b4"}
-OFFSETS = {"086": -0.15, "068": 0, "030": 0.15}
+RABBITS = ["094", "068", "030"]
+COLORS = {"094": "#8c564b", "068": "#cd853f", "030": "#1f77b4"}
+OFFSETS = {"094": -0.15, "068": 0, "030": 0.15}
 
 OUT_DIR = OUT_FIG / "delta_r_r0" / "optimized_v3"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,8 +59,8 @@ def main():
     ]
 
     for ct, dd, fn in [
-        ("standard", std_data, "086_068_030_standard_comparison.png"),
-        ("free", free_data, "086_068_030_free_comparison.png"),
+        ("standard", std_data, "094_068_030_standard_comparison.png"),
+        ("free", free_data, "094_068_030_free_comparison.png"),
     ]:
         fig, ax = plt.subplots(figsize=(8, 5))
         for r in RABBITS:
@@ -76,7 +76,7 @@ def main():
         title = "标准运动" if ct == "standard" else "自由运动"
         ax.set_xlabel("Time", fontsize=12)
         ax.set_ylabel("ΔR/R0", fontsize=12)
-        ax.set_title(f"086 / 068 / 030 — {title} ΔR/R0 (mean±std)", fontsize=14)
+        ax.set_title(f"094 / 068 / 030 — {title} ΔR/R0 (mean±std)", fontsize=14)
         ax.set_xticks(range(1, 7))
         ax.set_xticklabels([f"Week{i}" for i in range(1, 7)])
         ax.legend(fontsize=10)
