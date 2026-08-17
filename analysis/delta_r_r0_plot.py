@@ -18,7 +18,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.rcParams['font.family'] = ['PingFang SC', 'Heiti SC', 'Arial Unicode MS', 'DejaVu Sans']
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'sans-serif']
 matplotlib.rcParams['axes.unicode_minus'] = False
 
 from scipy.signal import find_peaks
@@ -29,6 +30,15 @@ from .preprocess import load_session, load_label, preprocess
 from .peaks import (detect_peaks_stage1, detect_peaks_stage1_adaptive,
                     estimate_lag, assign_peaks_to_windows)
 from .standard_motion import load_standard_session, _estimate_fs
+from .peak_trough_delta import (extract_standard_motion_delta,
+                                extract_free_motion_delta)
+
+# ============================================================
+# 文档法开关：use_doc_method 决定是否用「峰值−谷值 / 全局R₀」替换
+# 动态基线段。默认 False 保留旧法；在 config.py 翻转后可一键切换，
+# 失败可回滚。旧法函数保留作对比基线。
+# ============================================================
+USE_DOC_METHOD = bool(PARAMS.get("use_doc_method", False))
 
 # ============================================================
 # 配色：W1-W6
@@ -63,6 +73,12 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
 
     返回 DataFrame: week, time_s, delta_r_r0
     """
+    if USE_DOC_METHOD:
+        df = extract_standard_motion_delta(rabbit, max_per_week=max_per_week)
+        if not df.empty:
+            df = df[["week", "time_s", "delta_r_r0"]].copy()
+        return df
+
     records = []
     for week in WEEKS:
         try:
@@ -158,7 +174,7 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
                         "delta_r_r0": float(delta_r_r0[i]),
                     })
 
-        # 周级别双峰过滤：若整周 ΔR/R₀ 呈明显双峰分布，只保留低群
+        # 周级别双峰过滤：若整周 ΔR/R₀ 呈明显双峰分布，剔除干扰群
         if len(week_peaks) >= 6:
             dr_vals = np.array([p["delta_r_r0"] for p in week_peaks])
             dr_sorted = np.sort(dr_vals)
@@ -169,7 +185,14 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
             n_high = len(dr_sorted) - n_low
             if gap_ratio > 2.0 and n_low >= 3 and n_high >= 3:
                 cutoff = (dr_sorted[max_gap_idx] + dr_sorted[max_gap_idx + 1]) / 2
-                week_peaks = [p for p in week_peaks if p["delta_r_r0"] <= cutoff]
+                low_med = float(np.median(dr_sorted[:n_low]))
+                high_med = float(np.median(dr_sorted[n_low:]))
+                if high_med > 0 and low_med < 0.1 * high_med:
+                    # 低群为近零噪声/谷值塌缩簇，剔除低群保留高群
+                    week_peaks = [p for p in week_peaks if p["delta_r_r0"] > cutoff]
+                else:
+                    # 原行为：高群为高值干扰群，只保留低群
+                    week_peaks = [p for p in week_peaks if p["delta_r_r0"] <= cutoff]
 
         # 每周最多取 max_per_week 个峰，按时间均匀选取
         if week_peaks:
@@ -214,8 +237,16 @@ def _extract_free_motion_points(rabbit: str, n_per_week: int = 30) -> pd.DataFra
     每周采样 n_per_week 个点，按时间均匀选取（时间分段 + 段内随机）。
     时间分段仅基于活跃窗口内的时间，静止段不参与分段。
     使用标准运动参考进行上限过滤：排除超过标准运动峰值的异常点。
+    USE_DOC_METHOD=True 时改用文档法（活跃窗口采样点 / 全局R₀）。
     返回 DataFrame: week, time_s, delta_r_r0
     """
+    if USE_DOC_METHOD:
+        df = extract_free_motion_delta(rabbit, mode="sample",
+                                       n_per_week=n_per_week)
+        if not df.empty:
+            df = df[["week", "time_s", "delta_r_r0"]].copy()
+        return df
+
     from .preprocess import preprocess_raw
     from .standard_motion import get_reference_profile
 
@@ -291,7 +322,9 @@ def _extract_free_motion_points(rabbit: str, n_per_week: int = 30) -> pd.DataFra
             # 时间分段 + 段内随机选取
             pool_idx = np.where(positive)[0]
             pool_times = t_uni[idx_in[pool_idx]]
-            rng = np.random.default_rng(seed=hash((rabbit, week)) & 0xFFFF)
+            # 注意：不能用 hash()（字符串 hash 每进程随机化，PYTHONHASHSEED），
+            # 否则每次运行采样结果不同。用确定性编码作种子。
+            rng = np.random.default_rng(seed=int(rabbit) * 100 + int(week[1:]))
 
             # 将活跃窗口内的时间轴等分为 n_per_week 段
             seg_edges = np.linspace(pool_times.min() - 0.001,
@@ -353,6 +386,12 @@ def _extract_free_motion_peaks_in_window(rabbit: str) -> pd.DataFrame:
 
     返回 DataFrame: week, time_s, delta_r_r0
     """
+    if USE_DOC_METHOD:
+        df = extract_free_motion_delta(rabbit, mode="physio_peak")
+        if not df.empty:
+            df = df[["week", "time_s", "delta_r_r0"]].copy()
+        return df
+
     from .preprocess import preprocess_raw
     from .standard_motion import get_reference_profile
     from .peaks import (detect_peaks_stage2_adaptive, assign_peaks_to_windows)
@@ -431,6 +470,31 @@ def _extract_free_motion_peaks_in_window(rabbit: str) -> pd.DataFrame:
 # ============================================================
 # 4. 绘图
 # ============================================================
+def _remove_weekly_outliers(df: pd.DataFrame) -> pd.DataFrame:
+    """按周稳健单侧剔除自由运动 ΔR/R₀ 的偏大离群点。
+
+    只处理折线/散点展示层：剔除后仅影响主图下方两条自由运动子图
+    的散点与均值±std，不触碰底层数据提取（保留诊断价值）。
+
+    规则：每周 robust_std = max(1.4826×MAD, floor_std)，
+    阈值 = med + mad_k × robust_std；仅剔除高于阈值（偏大单侧）的点。
+    绝对地板 floor_std 防止 med≈0 的静息周因 MAD 塌缩而过度剔除。
+    """
+    if df is None or df.empty or "delta_r_r0" not in df.columns:
+        return df
+    mad_k = float(PARAMS.get("free_outlier_mad_k", 3.0))
+    floor_std = float(PARAMS.get("free_outlier_floor_std", 0.005))
+    keep = []
+    for _w, sub in df.groupby("week"):
+        v = sub["delta_r_r0"].to_numpy()
+        med = float(np.median(v))
+        mad = float(np.median(np.abs(v - med)))
+        robust_std = max(1.4826 * mad, floor_std)
+        thr = med + mad_k * robust_std
+        keep.append(sub[v <= thr])
+    return pd.concat(keep, ignore_index=True) if keep else df.iloc[0:0]
+
+
 def plot_delta_r_r0_per_rabbit(rabbit: str):
     """为单只兔子生成 ΔR/R₀ 趋势图（6子图，3×2布局）。
 
@@ -451,10 +515,14 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
     df_free_peaks = _extract_free_motion_peaks_in_window(rabbit)
     print(f"    自由运动生理学峰: {len(df_free_peaks)} 个峰值点")
 
+    # 按周稳健单侧剔除自由运动离群点（只影响下方两条自由运动子图展示）
+    df_free = _remove_weekly_outliers(df_free)
+    df_free_peaks = _remove_weekly_outliers(df_free_peaks)
+
     # 创建 3x2 子图
     fig, axes = plt.subplots(3, 2, figsize=(12, 13),
                              gridspec_kw={"width_ratios": [2.5, 1]})
-    fig.suptitle(f"Rabbit {rabbit} — ΔR/R₀ 随周数变化", fontsize=14, fontweight='bold')
+    fig.suptitle(f"Rabbit {rabbit} - ΔR/R0 随周数变化", fontsize=14, fontweight='bold')
 
     # --- (e) 左上：标准运动散点图 ---
     ax = axes[0, 0]
@@ -476,7 +544,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
             week_positions[w] = x_offset + (t_rel.max() if t_rel.size else 0) / 2
             x_offset += (t_rel.max() if t_rel.size else 5) + 5
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Standard movement", fontsize=11)
     ax.legend(fontsize=7, ncol=3, loc="upper right")
     ax.grid(alpha=0.2)
@@ -496,7 +564,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
             ax.errorbar(weeks_valid, means, yerr=stds,
                         fmt='o-', color="#1E90FF", capsize=4, lw=2, markersize=8)
     ax.set_xlabel("week")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Standard (mean±std)", fontsize=11)
     ax.set_xticks(range(1, 7))
     ax.grid(alpha=0.2)
@@ -517,7 +585,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
                        label=w)
             x_offset += (t_rel.max() if t_rel.size else 5) + 10
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Free movement", fontsize=11)
     ax.legend(fontsize=7, ncol=3, loc="upper right")
     ax.grid(alpha=0.2)
@@ -537,7 +605,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
             ax.errorbar(weeks_valid, means, yerr=stds,
                         fmt='o-', color="#1E90FF", capsize=4, lw=2, markersize=8)
     ax.set_xlabel("week")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Free (mean±std)", fontsize=11)
     ax.set_xticks(range(1, 7))
     ax.grid(alpha=0.2)
@@ -558,7 +626,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
                        label=w)
             x_offset += (t_rel.max() if t_rel.size else 5) + 10
     ax.set_xlabel("time (s)")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Free movement (physio peaks in active windows)", fontsize=11)
     ax.legend(fontsize=7, ncol=3, loc="upper right")
     ax.grid(alpha=0.2)
@@ -578,7 +646,7 @@ def plot_delta_r_r0_per_rabbit(rabbit: str):
             ax.errorbar(weeks_valid, means, yerr=stds,
                         fmt='o-', color="#1E90FF", capsize=4, lw=2, markersize=8)
     ax.set_xlabel("week")
-    ax.set_ylabel("ΔR/R₀")
+    ax.set_ylabel("ΔR/R0")
     ax.set_title("Free physio-peaks (mean\u00b1std)", fontsize=11)
     ax.set_xticks(range(1, 7))
     ax.grid(alpha=0.2)

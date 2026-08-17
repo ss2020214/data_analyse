@@ -20,7 +20,7 @@ from typing import List, Dict, Tuple, Optional
 import warnings
 import json
 
-from .config import ROOT, OUT
+from .config import ROOT, OUT, ALL_RABBITS
 
 # ─── 配置 ──────────────────────────────────────────────────────────────────────
 STANDARD_MOTION_DIR = ROOT / "标准运动数据汇总"
@@ -66,6 +66,86 @@ def _parse_rabbit_id(filename: str) -> str:
         else:
             break
     return rabbit_id
+
+
+# CSV 格式标准运动数据的周数映射：CSV 仅两列（时间,阻值）无周信息，
+# 周数按实验记录人工确认（2026-08 用户确认 035/053/097 均为第2周）。
+CSV_WEEK_MAP = {
+    "035": "w2",
+    "053": "w2",
+    "097": "w2",
+}
+
+
+def _load_csv_groups(fpath: Path) -> Dict[str, List[Dict]]:
+    """读取 CSV 格式标准运动数据（两列：时间,阻值），返回 {week: groups}。"""
+    parsed = _parse_rabbit_id(fpath.name)
+    numeric = ''.join(c for c in parsed if c.isdigit())
+    week = CSV_WEEK_MAP.get(numeric)
+    if week is None:
+        raise ValueError(
+            f"CSV 文件 {fpath.name} 未配置周数映射，请在 CSV_WEEK_MAP 中补充")
+    df = pd.read_csv(fpath, header=None)
+    if df.shape[0] == 0:
+        return {}
+    return {week: _extract_groups(df)}
+
+
+def _load_xlsx_groups(fpath: Path) -> Dict[str, List[Dict]]:
+    """读取 xlsx 格式标准运动数据（每 sheet 一周），返回 {week: groups}。"""
+    xf = _open_excel_file(fpath)
+    out: Dict[str, List[Dict]] = {}
+    for sheet in xf.sheet_names:
+        df = xf.parse(sheet, header=None)
+        if df.shape[0] == 0:
+            continue
+        out[_normalize_week(sheet)] = _extract_groups(df)
+    return out
+
+
+def _open_excel_file(fpath: Path) -> pd.ExcelFile:
+    """打开 xlsx；兼容 strict OOXML 格式（openpyxl 读不到 sheet 名）。
+
+    Excel 以「严格 Open XML 电子表格」保存的文件使用 purl.oclc.org 命名空间，
+    openpyxl 解析 workbook 时 sheet 列表为空。此处检测到空 sheet 名时在内存中
+    将 strict 命名空间改写为 transitional 后重试，不修改原文件。
+    """
+    xf = pd.ExcelFile(fpath)
+    if xf.sheet_names:
+        return xf
+
+    import io
+    import zipfile
+    _STRICT_REPL = [
+        (b"http://purl.oclc.org/ooxml/spreadsheetml/main",
+         b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"),
+        (b"http://purl.oclc.org/ooxml/officeDocument/relationships",
+         b"http://schemas.openxmlformats.org/officeDocument/2006/relationships"),
+        (b"http://purl.oclc.org/ooxml/drawingml/main",
+         b"http://schemas.openxmlformats.org/drawingml/2006/main"),
+        (b' conformance="strict"', b""),
+    ]
+    zin = zipfile.ZipFile(fpath)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.namelist():
+            data = zin.read(item)
+            if item.endswith(".xml") or item.endswith(".rels"):
+                for a, b in _STRICT_REPL:
+                    data = data.replace(a, b)
+            zout.writestr(item, data)
+    buf.seek(0)
+    xf2 = pd.ExcelFile(buf, engine="openpyxl")
+    if not xf2.sheet_names:
+        raise ValueError(f"{fpath.name} 无法解析出任何 sheet（疑似 strict OOXML 改写失败）")
+    return xf2
+
+
+def _load_standard_groups(fpath: Path) -> Dict[str, List[Dict]]:
+    """按文件后缀分发到 CSV / xlsx 读取，返回 {week: groups}。"""
+    if fpath.suffix.lower() == ".csv":
+        return _load_csv_groups(fpath)
+    return _load_xlsx_groups(fpath)
 
 
 def _extract_groups(df: pd.DataFrame) -> List[Dict]:
@@ -152,19 +232,14 @@ def load_all_standard_motion() -> pd.DataFrame:
     if not folder.exists():
         raise FileNotFoundError(f"标准运动数据文件夹不存在: {folder}")
 
-    for fpath in sorted(folder.glob("*.xlsx")):
-        rabbit_id = _parse_rabbit_id(fpath.name)
-        xf = pd.ExcelFile(fpath)
+    for rabbit in sorted(ALL_RABBITS):
+        fpath = _find_standard_file(rabbit)
+        if fpath is None:
+            continue
 
-        for sheet in xf.sheet_names:
-            week = _normalize_week(sheet)
-            df = xf.parse(sheet, header=None)
+        groups_by_week = _load_standard_groups(fpath)
 
-            if df.shape[0] == 0:
-                continue
-
-            groups = _extract_groups(df)
-
+        for week, groups in groups_by_week.items():
             for g_idx, grp in enumerate(groups):
                 t = grp["time"]
                 r = grp["resistance"]
@@ -180,7 +255,7 @@ def load_all_standard_motion() -> pd.DataFrame:
 
                 for i in range(len(t_valid)):
                     records.append({
-                        "rabbit": rabbit_id,
+                        "rabbit": rabbit,
                         "week": week,
                         "group_idx": g_idx,
                         "time_s": t_valid[i],
@@ -546,32 +621,33 @@ def load_standard_session(rabbit: str, week: str) -> List[Dict]:
             'count': float (运动次数),
             'info': dict (清洗信息)
     """
-    folder = STANDARD_MOTION_DIR
-    # 查找对应文件（排除 ~$ 临时文件）
-    rabbit_upper = rabbit.upper()
-    target = None
-    for fpath in folder.glob("*.xlsx"):
-        if fpath.name.startswith("~$"):
-            continue
-        if rabbit_upper in fpath.stem.upper():
-            target = fpath
-            break
+    # 查找对应文件（xlsx 优先，其次 csv；排除 ~$ 临时文件）
+    target = _find_standard_file(''.join(c for c in rabbit if c.isdigit()))
+    if target is None:
+        # 回退：按文件名子串匹配（兼容带字母前缀的ID）
+        folder = STANDARD_MOTION_DIR
+        rabbit_upper = rabbit.upper()
+        for pattern in ("*.xlsx", "*.csv"):
+            for fpath in folder.glob(pattern):
+                if fpath.name.startswith("~$"):
+                    continue
+                if rabbit_upper in fpath.stem.upper():
+                    target = fpath
+                    break
+            if target is not None:
+                break
 
     if target is None:
         raise FileNotFoundError(f"未找到兔子 {rabbit} 的标准运动文件")
 
-    xf = pd.ExcelFile(target)
+    groups_by_week = _load_standard_groups(target)
     week_norm = _normalize_week(week)
-    sheet_map = {_normalize_week(s): s for s in xf.sheet_names}
 
-    if week_norm not in sheet_map:
+    if week_norm not in groups_by_week:
         raise KeyError(f"{rabbit} 没有 {week_norm} 的标准运动数据")
 
-    df = xf.parse(sheet_map[week_norm], header=None)
-    groups = _extract_groups(df)
-
     results = []
-    for grp in groups:
+    for grp in groups_by_week[week_norm]:
         t = grp["time"]
         r = grp["resistance"]
         mask = np.isfinite(t) & np.isfinite(r)
@@ -594,18 +670,19 @@ def load_standard_session(rabbit: str, week: str) -> List[Dict]:
 # ─── 参考特征提取（供双阶段寻峰使用）──────────────────────────────
 
 def _find_standard_file(rabbit: str) -> Optional[Path]:
-    """根据兔子数字ID查找标准运动文件。"""
+    """根据兔子数字ID查找标准运动文件（xlsx 优先，其次 csv）。"""
     folder = STANDARD_MOTION_DIR
     if not folder.exists():
         return None
     # 匹配规则：文件名中含有兔子的数字ID（排除 ~$ 临时文件）
-    for fpath in folder.glob("*.xlsx"):
-        if fpath.name.startswith("~$"):
-            continue
-        parsed = _parse_rabbit_id(fpath.name)
-        numeric = ''.join(c for c in parsed if c.isdigit())
-        if numeric == rabbit or parsed.upper().endswith(rabbit):
-            return fpath
+    for pattern in ("*.xlsx", "*.csv"):
+        for fpath in folder.glob(pattern):
+            if fpath.name.startswith("~$"):
+                continue
+            parsed = _parse_rabbit_id(fpath.name)
+            numeric = ''.join(c for c in parsed if c.isdigit())
+            if numeric == rabbit or parsed.upper().endswith(rabbit):
+                return fpath
     return None
 
 
@@ -624,17 +701,20 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
         n_peaks_total         检出的标准峰总数
         movement_count_total  标注的运动次数总和
     """
+    from .config import PARAMS as _PARAMS
+    USE_DOC_METHOD = bool(_PARAMS.get("use_doc_method", False))
+    all_doc_amps = []  # 文档法收集：峰−结构谷 / 全局R₀（相对值）
+
     target = _find_standard_file(rabbit)
     if target is None:
         return None
 
-    xf = pd.ExcelFile(target)
+    groups_by_week = _load_standard_groups(target)
     week_norm = _normalize_week(week)
-    sheet_map = {_normalize_week(s): s for s in xf.sheet_names}
 
-    if week_norm not in sheet_map:
+    if week_norm not in groups_by_week:
         # 回退：尝试用最近的可用周
-        available = sorted(sheet_map.keys())
+        available = sorted(groups_by_week.keys())
         if not available:
             return None
         # 找最近的周
@@ -643,8 +723,7 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
                    if w[1:].isdigit() else 999)
         week_norm = best
 
-    df = xf.parse(sheet_map[week_norm], header=None)
-    groups = _extract_groups(df)
+    groups = groups_by_week[week_norm]
 
     if not groups:
         return None
@@ -712,6 +791,24 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
             peak_amps = detrended[peaks_idx]
             all_peak_amps.extend(peak_amps.tolist())
 
+            # 文档法：peak_rel_amp* 改为「峰−结构谷 / 全局R₀」相对幅度
+            if USE_DOC_METHOD:
+                from .peak_trough_delta import (extract_rest_resistance_r0,
+                                                peak_trough_delta,
+                                                _rough_detrend)
+                R0, _ = extract_rest_resistance_r0(
+                    t, r, active_mask=None,
+                    r_quantile=_PARAMS.get("doc_r0_quantile", 0.20),
+                    params=_PARAMS)
+                dtd = _rough_detrend(
+                    r, fs_est,
+                    win_s=_PARAMS.get("doc_detrend_window_s", 5.0))
+                doc_delta, _, _ = peak_trough_delta(r, dtd, peaks_idx, R0,
+                                                    fs_est, _PARAMS)
+                for v in doc_delta:
+                    if np.isfinite(v) and v > 0:
+                        all_doc_amps.append(float(v))
+
             # FWHM
             try:
                 widths, _, _, _ = peak_widths(detrended, peaks_idx, rel_height=0.5)
@@ -750,12 +847,21 @@ def get_reference_profile(rabbit: str, week: str) -> Optional[Dict]:
     peak_amp_mad = float(np.nanmedian(np.abs(peak_amps_arr - peak_amp_median)))
     peak_amp_p90 = float(np.percentile(peak_amps_arr, 90))
 
+    # 文档法：peak_rel_amp* 直接用文档 ΔR/R₀ 相对值的分位数（已是比值）
+    if USE_DOC_METHOD and all_doc_amps:
+        doc_arr = np.array(all_doc_amps)
+        rel_amp_median = float(np.nanmedian(doc_arr))
+        rel_amp_p90 = float(np.nanpercentile(doc_arr, 90))
+    else:
+        rel_amp_median = peak_amp_median / max(abs(bl_median), 1e-6)
+        rel_amp_p90 = peak_amp_p90 / max(abs(bl_median), 1e-6)
+
     profile = {
         "baseline_median": bl_median,
         "peak_amp_median": peak_amp_median,
         "peak_amp_mad": peak_amp_mad,
-        "peak_rel_amp_median": peak_amp_median / max(abs(bl_median), 1e-6),
-        "peak_rel_amp_p90": peak_amp_p90 / max(abs(bl_median), 1e-6),
+        "peak_rel_amp_median": rel_amp_median,
+        "peak_rel_amp_p90": rel_amp_p90,
         "peak_fwhm_median": float(np.nanmedian(all_peak_fwhms))
                              if all_peak_fwhms else 0.4,
         "noise_mad": noise_mad,

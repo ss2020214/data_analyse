@@ -119,4 +119,31 @@ PARAMS = {
     # 长窗口(6s): pad≈min(1.0, 1.0/3.0)=0.33s
     "label_window_pad_max_s": 1.0,            # 最大扩展量
     "label_window_pad_base_s": 1.0,           # 基准扩展量（用于反比计算）
+
+    # ------ 文档法 ΔR/R₀（峰值−谷值 / 全局 R₀）参数组 ------
+    # 口径: ΔR/R₀ = (R_peak − R_valley) / R₀
+    #  - R_peak: 峰处真实阻值（清洗后）
+    #  - R_valley: 该峰局部结构谷（find_peaks left_base 处阻值）
+    #  - R₀: 全局常量（session 静息段 P20 分位数，受 r_quantile 配置）
+    # use_doc_method: 主开关，默认 False（现有图不受影响）；对比验证通过后翻转启用。
+    # 自由运动按周单侧离群剔除（用于主图 delta_r_r0_*.png）：
+    # 每周对 ΔR/R₀ 计算 med + mad_k × robust_std，只剔除偏大的单侧离群点。
+    # robust_std = 1.4826×MAD，但设定绝对地板 floor_std，防止 med≈0 的周
+    # MAD 塌缩导致阈值过低而过度剔除（如 Sham 静息周）。
+    "free_outlier_mad_k": 3.0,     # 稳健 std 倍数（>med+mad_k×robust_std 判为离群）
+    "free_outlier_floor_std": 0.005,  # robust_std 绝对下限（0.5% ΔR/R₀）
+
+    "use_doc_method": False,   # 已切回原动态基线算法（文档法关闭）
+    # 结构谷检测的滚动基线窗口（秒），与现标准法 P30 基线 C30 一致
+    "doc_detrend_window_s": 5.0,
+    # 谷回退阈值：峰脚 left_base 与峰间距 < 该值（秒）时，改取峰±0.5s 局部最小值
+    "doc_valley_min_gap_s": 0.2,
+    # 峰左侧谷搜索窗口（秒）：谷只在与峰的该距离内寻找，且取窗口内距峰最近的谷
+    "doc_valley_seek_s": 1.5,
+    # 静息段 R₀ 的分位数（P20 = 0.20）
+    "doc_r0_quantile": 0.20,
+    # 静息段最小占比，低于该值记录告警并回退整段低分位数，避免 R₀ 偏肥
+    "doc_rest_min_ratio": 0.1,
+    # 标准运动上限容差（沿用现标准运动上限过滤允许值）
+    "doc_upper_limit_k": 1.2,
 }
