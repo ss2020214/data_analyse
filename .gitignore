@@ -57,3 +57,6 @@ __MACOSX/
 
 # Excel temporary files
 ~$*.xlsx
+
+# 中间生成物（可由脚本重新生成）
+output/intermediate/
