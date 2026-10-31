@@ -20,7 +20,7 @@ from typing import List, Dict, Tuple, Optional
 import warnings
 import json
 
-from .config import ROOT, OUT, ALL_RABBITS
+from .config import ROOT, OUT, ALL_RABBITS_STD
 
 # ─── 配置 ──────────────────────────────────────────────────────────────────────
 STANDARD_MOTION_DIR = ROOT / "标准运动数据汇总"
@@ -232,7 +232,7 @@ def load_all_standard_motion() -> pd.DataFrame:
     if not folder.exists():
         raise FileNotFoundError(f"标准运动数据文件夹不存在: {folder}")
 
-    for rabbit in sorted(ALL_RABBITS):
+    for rabbit in sorted(ALL_RABBITS_STD):
         fpath = _find_standard_file(rabbit)
         if fpath is None:
             continue

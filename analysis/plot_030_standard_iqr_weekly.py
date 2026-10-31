@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-030 标准运动散点图 — 带组内 IQR 带 + 均值曲线的独立图（周数 X 轴）。
+单兔标准运动散点图 — 带组内 IQR 带 + 均值曲线的独立图（周数 X 轴）。
 
+- 默认兔子 030（delta_r_r0_030_standard_iqr_weekly.png）
+- 新增空白对照兔子 050/070 按同一流程生成各自独立图
 - X 轴: week1–week6
 - 散点: 黑色 50% 透明度
 - IQR 带: #99C7CE 50% 透明度
@@ -123,19 +125,19 @@ def _compute_mean_curve(df_plot: pd.DataFrame) -> tuple | None:
     return x_dense, m_smooth
 
 
-def plot_030_standard_iqr_weekly():
-    """主绘图函数。"""
+def plot_standard_iqr_weekly(rabbit: str = "030"):
+    """主绘图函数：为指定兔子绘制标准运动 IQR 周趋势图。"""
     print("=" * 60)
-    print("030 标准运动散点图 — week X轴 + IQR带 + 均值曲线")
+    print(f"{rabbit} 标准运动散点图 — week X轴 + IQR带 + 均值曲线")
     print("=" * 60)
 
     # 1. 提取数据
-    print("[1/3] 提取 030 标准运动峰值数据...")
-    df_std = _extract_standard_motion_peaks("030")
+    print(f"[1/3] 提取 {rabbit} 标准运动峰值数据...")
+    df_std = _extract_standard_motion_peaks(rabbit)
     print(f"  共 {len(df_std)} 个峰值点，覆盖 {df_std['week'].nunique()} 周")
 
     if df_std.empty:
-        print("  [ERROR] 030 标准运动数据为空，无法绘图")
+        print(f"  [ERROR] {rabbit} 标准运动数据为空，无法绘图")
         return None
 
     # 2. 构建周数 X 轴
@@ -203,7 +205,7 @@ def plot_030_standard_iqr_weekly():
     fig.tight_layout()
 
     # 5. 保存
-    save_path = OUT_DIR / "delta_r_r0_030_standard_iqr_weekly.png"
+    save_path = OUT_DIR / f"delta_r_r0_{rabbit}_standard_iqr_weekly.png"
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  图表已保存: {save_path}")
@@ -211,5 +213,13 @@ def plot_030_standard_iqr_weekly():
     return save_path
 
 
+def plot_030_standard_iqr_weekly():
+    """向后兼容入口：绘制 030 的标准运动 IQR 周趋势图。"""
+    return plot_standard_iqr_weekly("030")
+
+
 if __name__ == "__main__":
-    plot_030_standard_iqr_weekly()
+    import sys
+    rabbits = sys.argv[1:] or ["030"]
+    for rb in rabbits:
+        plot_standard_iqr_weekly(rb)

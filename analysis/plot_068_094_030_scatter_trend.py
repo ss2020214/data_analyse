@@ -50,6 +50,16 @@ RABBIT_OFFSET = {
     "030": 0.08,
 }
 
+# 多兔扩展图：加入新增空白对照兔子 050（070 暂不参与该对比图，用户要求移除）
+# 配色沿用同组兔子色相独立原则：050 蓝绿，与既有兔子颜色不重复
+RABBITS_EXT = ["068", "094", "030", "050"]
+RABBIT_COLORS_EXT = {
+    **RABBIT_COLORS,
+    "050": "#009E73",  # 蓝绿 (sham)
+}
+RABBIT_OFFSET_EXT = {rb: round(-0.08 + 0.04 * i, 2)
+                     for i, rb in enumerate(RABBITS_EXT)}
+
 
 def _smooth_curve(x, y, n_points=200, k=3):
     """B-spline 平滑曲线（与 plot_030_088_scatter_trend 一致）。"""
@@ -70,12 +80,21 @@ def _smooth_curve(x, y, n_points=200, k=3):
     return x_smooth, y_smooth
 
 
-def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
-    """绘制三兔子散点趋势图。
+def plot_multi_rabbits_scatter_trend(df_dict, motion_type, save_path,
+                                     rabbits=None, colors=None, offsets=None):
+    """绘制多兔子散点趋势图。
 
     df_dict: {rabbit: DataFrame[week, delta_r_r0]}
     motion_type: '标准运动' / '自由运动'
+    rabbits / colors / offsets: 兔子顺序、配色与固定偏移，默认 068/094/030 三兔配置
     """
+    if rabbits is None:
+        rabbits = RABBITS
+    if colors is None:
+        colors = RABBIT_COLORS
+    if offsets is None:
+        offsets = RABBIT_OFFSET
+
     fig, ax = plt.subplots(figsize=(10, 6.5))
 
     x_positions = np.arange(len(WEEKS))
@@ -84,7 +103,7 @@ def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
     rng = np.random.default_rng(seed=42)
 
     # 平滑拟合曲线（每周均值，B-spline）
-    for rabbit in RABBITS:
+    for rabbit in rabbits:
         df = df_dict.get(rabbit, pd.DataFrame())
         if df.empty:
             continue
@@ -92,20 +111,20 @@ def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
         for wi, week in enumerate(WEEKS):
             sub = df[df["week"] == week]["delta_r_r0"].dropna()
             if sub.size > 0:
-                x_pts.append(x_positions[wi] + RABBIT_OFFSET[rabbit])
+                x_pts.append(x_positions[wi] + offsets[rabbit])
                 y_pts.append(float(sub.mean()))
         if len(x_pts) >= 2:
             x_smooth, y_smooth = _smooth_curve(x_pts, y_pts)
-            ax.plot(x_smooth, y_smooth, color=RABBIT_COLORS[rabbit],
+            ax.plot(x_smooth, y_smooth, color=colors[rabbit],
                     lw=2.2, alpha=0.85, label=rabbit)
 
     # 散点（固定偏移，黑边）
-    for rabbit in RABBITS:
+    for rabbit in rabbits:
         df = df_dict.get(rabbit, pd.DataFrame())
         if df.empty:
             continue
-        offset = RABBIT_OFFSET[rabbit]
-        color = RABBIT_COLORS[rabbit]
+        offset = offsets[rabbit]
+        color = colors[rabbit]
         for wi, week in enumerate(WEEKS):
             sub = df[df["week"] == week]["delta_r_r0"].dropna().to_numpy()
             if sub.size == 0:
@@ -120,23 +139,23 @@ def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
     ax.set_xticklabels(WEEKS, fontsize=11)
     ax.set_xlabel("Week", fontsize=12)
     ax.set_ylabel("ΔR/R0 (%)", fontsize=12)
-    ax.set_title(f"068 / 094 / 030 - {motion_type}", fontsize=14,
+    ax.set_title(f"{' / '.join(rabbits)} - {motion_type}", fontsize=14,
                  fontweight="bold", fontproperties=_zh_font)
 
-    # 图例：底部无框，显示兔子ID + 样本量（同参考图风格，三列）
+    # 图例：底部无框，显示兔子ID + 样本量（同参考图风格）
     handles = []
     legend_labels = []
-    for rabbit in RABBITS:
+    for rabbit in rabbits:
         df = df_dict.get(rabbit, pd.DataFrame())
         n = len(df)
         legend_labels.append(f"{rabbit} (n = {n})")
         handles.append(plt.Line2D([0], [0], marker="o", color="w",
-                                  markerfacecolor=RABBIT_COLORS[rabbit],
+                                  markerfacecolor=colors[rabbit],
                                   markeredgecolor="black",
                                   markersize=8, label=rabbit))
     ax.legend(handles=handles, labels=legend_labels, fontsize=10,
               loc="lower center", frameon=False,
-              bbox_to_anchor=(0.5, -0.15), ncol=3)
+              bbox_to_anchor=(0.5, -0.15), ncol=len(rabbits))
 
     ax.grid(axis="y", alpha=0.25)
     ax.spines["top"].set_visible(False)
@@ -152,22 +171,36 @@ def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
     return save_path
 
 
-def _load_data():
+def plot_three_rabbits_scatter_trend(df_dict, motion_type, save_path):
+    """068/094/030 三兔子散点趋势图（保持原签名不变）。"""
+    return plot_multi_rabbits_scatter_trend(
+        df_dict, motion_type, save_path,
+        RABBITS, RABBIT_COLORS, RABBIT_OFFSET)
+
+
+def _load_data(with_free: bool = True):
     """加载数据，选点策略与 grouped_bar_068_094_030 一致。
 
-    自由运动使用 optimized_v3 双维度趋势引导选点结果：
+    标准运动：覆盖 068/094/030 + 新增空白对照 050（_extract_standard_motion_peaks）。
+    自由运动仍仅 068/094/030（050 无自由运动数据），使用 optimized_v3
+    双维度趋势引导选点结果：
       - 参照兔子（030）直接放行原始采样点
       - 非参照兔子（068/094）分位数窗口 + 均值/std 双目标引导
-    标准运动用 _extract_standard_motion_peaks（与 optimized 系列一致）。
     """
-    print("  运行双维度趋势引导选点 (v3) 以获取 optimized 自由运动数据...")
-    results = normalize_all_rabbits_v3(verbose=False)
-    all_normalized = results["normalized"]
-
     std_data, free_data = {}, {}
-    for rabbit in RABBITS:
+
+    all_normalized = {}
+    if with_free:
+        print("  运行双维度趋势引导选点 (v3) 以获取 optimized 自由运动数据...")
+        results = normalize_all_rabbits_v3(verbose=False)
+        all_normalized = results["normalized"]
+
+    for rabbit in RABBITS_EXT:
         print(f"  {rabbit}...")
         std_data[rabbit] = _extract_standard_motion_peaks(rabbit)
+        free_data[rabbit] = pd.DataFrame()
+        if not with_free or rabbit not in RABBITS:
+            continue
         free_rows = []
         for week, pts in all_normalized.get(rabbit, {}).items():
             for pt in pts:
@@ -199,6 +232,12 @@ def main():
     plot_three_rabbits_scatter_trend(
         free_data, "自由运动",
         str(OUT_DIR / "068_094_030_free_scatter_trend.png"))
+
+    print("\n绘制 4 兔扩展标准运动散点趋势图 (含新增空白对照 050)...")
+    plot_multi_rabbits_scatter_trend(
+        std_data, "标准运动",
+        str(OUT_DIR / "068_094_030_050_standard_scatter_trend.png"),
+        rabbits=RABBITS_EXT, colors=RABBIT_COLORS_EXT, offsets=RABBIT_OFFSET_EXT)
 
     print("\n完成!")
 

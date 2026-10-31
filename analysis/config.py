@@ -31,9 +31,18 @@ GROUPS = {
     "infection":    ["016", "065", "088"],
     "sham":         ["035", "053", "068", "097"],
 }
+
+# 新增空白对照兔子：仅提供标准运动数据（"标准运动数据汇总"目录），
+# 无原始连续信号/人工标注文件，因此不并入 ALL_RABBITS，
+# 只参与标准运动相关分析与图表（std_peaks / IQR 周趋势 / 标准运动散点趋势）。
+STD_ONLY_RABBITS = {"050": "sham", "070": "sham"}
+
 RABBIT2GROUP = {r: g for g, rs in GROUPS.items() for r in rs}
+RABBIT2GROUP.update(STD_ONLY_RABBITS)
 ALL_RABBITS = (GROUPS["normal"] + GROUPS["pathological"]
                + GROUPS["infection"] + GROUPS["sham"])
+# 标准运动全量兔子（含仅标准运动数据的兔子），供标准运动加载/绘图使用
+ALL_RABBITS_STD = ALL_RABBITS + sorted(STD_ONLY_RABBITS)
 
 # 文件夹与文件名映射
 FOLDERS = {
@@ -146,4 +155,55 @@ PARAMS = {
     "doc_rest_min_ratio": 0.1,
     # 标准运动上限容差（沿用现标准运动上限过滤允许值）
     "doc_upper_limit_k": 1.2,
+}
+
+# 标准运动滚动基线分位数的按兔子/周覆盖（默认取 PARAMS["baseline_quantile"]=0.30）
+# 050 的 w3/w4 中 P30 基线被密集峰体抬高、偏离静息位，按用户要求改用 P20
+STD_BASELINE_QUANTILE_OVERRIDE = {
+    "050": {"w3": 0.20, "w4": 0.20},
+}
+
+# 标准运动基线模式覆盖（优先于分位数覆盖）：
+#   None（默认）→ 滚动分位数基线；"global_min" → 整段最小值常数基线
+STD_BASELINE_MODE_OVERRIDE = {
+    "050": {"w3": "global_min", "w4": "global_min"},
+}
+
+
+def std_baseline_quantile(rabbit: str, week: str) -> float:
+    """标准运动滚动基线的分位数：优先按兔子/周覆盖，否则用全局默认值。"""
+    return float(STD_BASELINE_QUANTILE_OVERRIDE.get(rabbit, {})
+                 .get(week, PARAMS["baseline_quantile"]))
+
+
+def std_baseline_mode(rabbit: str, week: str) -> str | None:
+    """标准运动基线模式：None=滚动分位数（默认），"global_min"=整段最小值常数基线。"""
+    return STD_BASELINE_MODE_OVERRIDE.get(rabbit, {}).get(week)
+
+
+# 每周选点模式覆盖（峰数超过 max_per_week 时的选点策略）：
+#   "max"（默认）→ 时间分 max_per_week 段，段内取 ΔR/R₀ 最大
+#   "min"         → 时间分段，段内取 ΔR/R₀ 最小
+#   "seg_median"  → 时间分段，段内取 ΔR/R₀ 中位数对应的峰
+#   "global_min"  → 不按时间分段，直接取全周 ΔR/R₀ 最小的 max_per_week 个
+# 050：w1/w2 取全局最小 10 个；w5 段内取最小；w6 段内取中位
+STD_SELECT_MODE_OVERRIDE = {
+    "050": {"w1": "global_min", "w2": "global_min",
+            "w5": "min", "w6": "seg_median"},
+}
+
+
+def std_select_mode(rabbit: str, week: str) -> str:
+    """每周选点模式：默认 "max"，支持按兔子/周覆盖 min / seg_median / global_min。"""
+    return STD_SELECT_MODE_OVERRIDE.get(rabbit, {}).get(week, "max")
+
+
+# 手动峰级覆盖：按峰时间（秒）强制剔除/补入指定峰，用于个别峰的人工精确调整。
+# 应用时机：在该周常规选点完成后；容差 0.05s（峰间距≥1s）；
+# 补入峰必须存在于该周已检出的正值峰池中。
+STD_SELECT_FORCE_EXCLUDE = {
+    "050": {"w5": [43.63]},   # w5 原第 1 个入选（绿#1）峰
+}
+STD_SELECT_FORCE_INCLUDE = {
+    "050": {"w5": [63.81]},   # 原绿#5 与绿#6 之间的峰
 }

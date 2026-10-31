@@ -25,7 +25,10 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 from scipy.signal import find_peaks
 from pathlib import Path
 
-from .config import GROUPS, WEEKS, OUT_FIG, PARAMS, RABBIT2GROUP, ALL_RABBITS
+from .config import (GROUPS, WEEKS, OUT_FIG, PARAMS, RABBIT2GROUP,
+                     ALL_RABBITS, std_baseline_quantile, std_baseline_mode,
+                     std_select_mode, STD_SELECT_FORCE_EXCLUDE,
+                     STD_SELECT_FORCE_INCLUDE)
 from .preprocess import load_session, load_label, preprocess
 from .peaks import (detect_peaks_stage1, detect_peaks_stage1_adaptive,
                     estimate_lag, assign_peaks_to_windows)
@@ -69,6 +72,9 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
 
     绘图采样：
     - 每周最多取 max_per_week 个峰，按时间均匀选取
+    - 段内默认取 ΔR/R₀ 最大，支持按兔子/周覆盖为段内最小/段内中位/全局最小
+      （config.STD_SELECT_MODE_OVERRIDE）
+    - 选点完成后支持按时间手动剔除/补入指定峰（config.STD_SELECT_FORCE_*）
     - 若峰数 < max_per_week，则全部保留
 
     返回 DataFrame: week, time_s, delta_r_r0
@@ -97,20 +103,25 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
             if not np.isfinite(count):
                 count = 0
 
-            # P30 滚动基线（5s窗口，自适应：记录太短时自动缩小）
+            # 基线：默认滚动分位数（P30）；支持按兔子/周覆盖分位数
+            # 或改为整段最小值常数基线（config.STD_BASELINE_MODE_OVERRIDE）
             fs = _estimate_fs(t)
-            win_b = max(11, int(5.0 * fs))
-            if win_b % 2 == 0:
-                win_b += 1
-            # 边界处理：点数不足以支撑完整窗口时，缩小至点数的 2/3
-            if len(t) < win_b:
-                win_b = max(5, (2 * len(t)) // 3)
+            if std_baseline_mode(rabbit, week) == "global_min":
+                baseline = np.full_like(np.asarray(r, dtype=float),
+                                        float(np.min(r)))
+            else:
+                win_b = max(11, int(5.0 * fs))
                 if win_b % 2 == 0:
                     win_b += 1
-            baseline = (pd.Series(r)
-                        .rolling(win_b, center=True, min_periods=max(3, win_b // 2))
-                        .quantile(0.30)
-                        .bfill().ffill().to_numpy())
+                # 边界处理：点数不足以支撑完整窗口时，缩小至点数的 2/3
+                if len(t) < win_b:
+                    win_b = max(5, (2 * len(t)) // 3)
+                    if win_b % 2 == 0:
+                        win_b += 1
+                baseline = (pd.Series(r)
+                            .rolling(win_b, center=True, min_periods=max(3, win_b // 2))
+                            .quantile(std_baseline_quantile(rabbit, week))
+                            .bfill().ffill().to_numpy())
 
             detrended = r - baseline
 
@@ -194,35 +205,72 @@ def _extract_standard_motion_peaks(rabbit: str, max_per_week: int = 10) -> pd.Da
                     # 原行为：高群为高值干扰群，只保留低群
                     week_peaks = [p for p in week_peaks if p["delta_r_r0"] <= cutoff]
 
-        # 每周最多取 max_per_week 个峰，按时间均匀选取
+        # 每周最多取 max_per_week 个峰：默认时间分段选点，支持按兔子/周覆盖为
+        # 段内最小/段内中位/全局最小（config.STD_SELECT_MODE_OVERRIDE）
         if week_peaks:
             df_week = pd.DataFrame(week_peaks)
             if len(df_week) > max_per_week:
-                # 时间分段选取：将时间轴等分为 max_per_week 段，每段取一个峰
+                mode = std_select_mode(rabbit, week)
                 df_week = df_week.sort_values("time_s").reset_index(drop=True)
-                t_arr = df_week["time_s"].to_numpy()
-                seg_edges = np.linspace(t_arr.min() - 0.01,
-                                        t_arr.max() + 0.01, max_per_week + 1)
-                sel_idx = []
-                for si in range(max_per_week):
-                    mask = (t_arr >= seg_edges[si]) & (t_arr < seg_edges[si + 1])
-                    candidates = np.where(mask)[0]
-                    candidates = [c for c in candidates if c not in sel_idx]
-                    if candidates:
-                        # 段内取 ΔR/R₀ 最大的
-                        best = max(candidates,
-                                   key=lambda x: df_week.iloc[x]["delta_r_r0"])
-                        sel_idx.append(best)
-                # 空段补充：从剩余未选中取 ΔR/R₀ 最大的
-                if len(sel_idx) < max_per_week:
-                    remaining = [i for i in range(len(df_week)) if i not in sel_idx]
-                    remaining.sort(key=lambda x: df_week.iloc[x]["delta_r_r0"],
-                                   reverse=True)
-                    for ri in remaining:
-                        if len(sel_idx) >= max_per_week:
-                            break
-                        sel_idx.append(ri)
-                df_week = df_week.iloc[sorted(sel_idx)]
+                if mode == "global_min":
+                    # 不按时间分段，直接取全周 ΔR/R₀ 最小的 max_per_week 个
+                    df_week = (df_week.nsmallest(max_per_week, "delta_r_r0")
+                               .sort_values("time_s").reset_index(drop=True))
+                else:
+                    # 时间分段选取：将时间轴等分为 max_per_week 段，每段取一个峰
+                    t_arr = df_week["time_s"].to_numpy()
+                    vals = df_week["delta_r_r0"].to_numpy()
+                    week_med = float(np.median(vals))
+                    sign = -1.0 if mode == "min" else 1.0
+                    seg_edges = np.linspace(t_arr.min() - 0.01,
+                                            t_arr.max() + 0.01, max_per_week + 1)
+                    sel_idx = []
+                    for si in range(max_per_week):
+                        mask = (t_arr >= seg_edges[si]) & (t_arr < seg_edges[si + 1])
+                        candidates = np.where(mask)[0]
+                        candidates = [c for c in candidates if c not in sel_idx]
+                        if candidates:
+                            if mode == "seg_median":
+                                # 段内取 ΔR/R₀ 中位数对应的峰（偶数个取较低中位）
+                                cv = np.array([vals[c] for c in candidates])
+                                best = candidates[int(np.argsort(cv)[(cv.size - 1) // 2])]
+                            else:
+                                # 段内取 ΔR/R₀ 最大（或按覆盖取最小）
+                                best = max(candidates, key=lambda x: sign * vals[x])
+                            sel_idx.append(best)
+                    # 空段补充：max/min 补最极端值；seg_median 补最接近周中位数的
+                    if len(sel_idx) < max_per_week:
+                        remaining = [i for i in range(len(df_week)) if i not in sel_idx]
+                        if mode == "seg_median":
+                            remaining.sort(key=lambda x: abs(vals[x] - week_med))
+                        else:
+                            remaining.sort(key=lambda x: sign * vals[x], reverse=True)
+                        for ri in remaining:
+                            if len(sel_idx) >= max_per_week:
+                                break
+                            sel_idx.append(ri)
+                    df_week = df_week.iloc[sorted(sel_idx)]
+
+            # 手动峰级覆盖：强制剔除/补入指定时间的峰（config.STD_SELECT_FORCE_*）
+            exc_t = STD_SELECT_FORCE_EXCLUDE.get(rabbit, {}).get(week, [])
+            inc_t = STD_SELECT_FORCE_INCLUDE.get(rabbit, {}).get(week, [])
+            if exc_t or inc_t:
+                tol = 0.05  # 秒；峰间距 ≥1s，0.05s 容差安全
+                if exc_t:
+                    keep = ~df_week["time_s"].apply(
+                        lambda x: any(abs(x - e) < tol for e in exc_t))
+                    df_week = df_week[keep]
+                if inc_t:
+                    pool = pd.DataFrame(week_peaks)
+                    add_rows = []
+                    for it in inc_t:
+                        hit = pool[(pool["time_s"] - it).abs() < tol]
+                        if not hit.empty:
+                            j = int((hit["time_s"] - it).abs().values.argmin())
+                            add_rows.append(hit.iloc[[j]])
+                    if add_rows:
+                        df_week = pd.concat([df_week] + add_rows, ignore_index=True)
+                df_week = df_week.sort_values("time_s").reset_index(drop=True)
             records.extend(df_week.to_dict("records"))
 
     return pd.DataFrame(records)
